@@ -1,0 +1,164 @@
+name: Build merged server resource pack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'km-minecraft-resourcepack-26.2.zip'
+      - '.github/workflows/build-server-resourcepack.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download VVResource v8.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            'https://www.dropbox.com/scl/fi/bzj1csxthwvdry8jf9akg/VVResource_8.0-for-1.21.11_26.1.zip?rlkey=4uompqi26ytbv97seysxa2lv3&dl=1' \
+            -o /tmp/vvresource.zip
+          unzip -t /tmp/vvresource.zip >/dev/null
+          unzip -t km-minecraft-resourcepack-26.2.zip >/dev/null
+
+      - name: Merge resource packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/vv /tmp/km /tmp/merged
+          mkdir -p /tmp/vv /tmp/km /tmp/merged
+          unzip -q /tmp/vvresource.zip -d /tmp/vv
+          unzip -q km-minecraft-resourcepack-26.2.zip -d /tmp/km
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, shutil
+
+          vv = Path('/tmp/vv')
+          km = Path('/tmp/km')
+          out = Path('/tmp/merged')
+          collisions = []
+          merged_json = []
+          overwritten = []
+
+          def flatten_single_wrapper(root: Path):
+              items = [p for p in root.iterdir() if p.name != '__MACOSX']
+              if len(items) == 1 and items[0].is_dir() and not (root/'pack.mcmeta').exists():
+                  child = items[0]
+                  for p in list(child.iterdir()):
+                      shutil.move(str(p), root / p.name)
+                  child.rmdir()
+
+          flatten_single_wrapper(vv)
+          flatten_single_wrapper(km)
+
+          def merge(a, b, key=''):
+              # b (km/Vegeter) has priority when scalar values conflict.
+              if isinstance(a, dict) and isinstance(b, dict):
+                  r = dict(a)
+                  for k, v in b.items():
+                      r[k] = merge(r[k], v, k) if k in r else v
+                  return r
+              if isinstance(a, list) and isinstance(b, list):
+                  # Keep both packs' dispatch/case entries; Vegeter entries first.
+                  seq = b + a
+                  result = []
+                  seen = set()
+                  for x in seq:
+                      try:
+                          marker = json.dumps(x, sort_keys=True, ensure_ascii=False)
+                      except Exception:
+                          marker = repr(x)
+                      if marker not in seen:
+                          seen.add(marker)
+                          result.append(x)
+                  # Range-dispatch entries must remain ordered by threshold.
+                  if result and all(isinstance(x, dict) and 'threshold' in x for x in result):
+                      try:
+                          result.sort(key=lambda x: float(x['threshold']))
+                      except Exception:
+                          pass
+                  return result
+              return b
+
+          # VVResource is the base.
+          shutil.copytree(vv, out, dirs_exist_ok=True)
+
+          for src in km.rglob('*'):
+              if not src.is_file():
+                  continue
+              rel = src.relative_to(km)
+              dst = out / rel
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              if not dst.exists():
+                  shutil.copy2(src, dst)
+                  continue
+
+              collisions.append(rel.as_posix())
+              if src.suffix.lower() in {'.json', '.mcmeta'}:
+                  try:
+                      with dst.open('r', encoding='utf-8-sig') as f:
+                          a = json.load(f)
+                      with src.open('r', encoding='utf-8-sig') as f:
+                          b = json.load(f)
+                      data = merge(a, b)
+                      with dst.open('w', encoding='utf-8') as f:
+                          json.dump(data, f, ensure_ascii=False, indent=2)
+                          f.write('\n')
+                      merged_json.append(rel.as_posix())
+                      continue
+                  except Exception:
+                      pass
+
+              # For binary/text conflicts, keep the existing Vegeter asset.
+              shutil.copy2(src, dst)
+              overwritten.append(rel.as_posix())
+
+          report = [
+              'Merged server resource pack',
+              'Base: VVResource v8.0 (1.21.11+)',
+              'Overlay/priority: km-minecraft-resourcepack-26.2 (Vegeter)',
+              '',
+              f'Collision count: {len(collisions)}',
+              f'JSON/mcmeta merged: {len(merged_json)}',
+              f'Vegeter overwrite: {len(overwritten)}',
+              '',
+              '[Collisions]', *collisions,
+              '', '[JSON merged]', *merged_json,
+              '', '[Vegeter overwrite]', *overwritten,
+          ]
+          Path('RESOURCEPACK_MERGE_REPORT.txt').write_text('\n'.join(report) + '\n', encoding='utf-8')
+          print('\n'.join(report[:8]))
+          PY
+
+      - name: Build ZIP and SHA-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f server-resourcepack-26.2.zip server-resourcepack-26.2.sha1
+          (cd /tmp/merged && zip -qr "$GITHUB_WORKSPACE/server-resourcepack-26.2.zip" .)
+          sha1sum server-resourcepack-26.2.zip | awk '{print $1}' > server-resourcepack-26.2.sha1
+          unzip -t server-resourcepack-26.2.zip >/dev/null
+          echo "SHA1=$(cat server-resourcepack-26.2.sha1)"
+          ls -lh server-resourcepack-26.2.zip
+
+      - name: Commit merged pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server-resourcepack-26.2.zip server-resourcepack-26.2.sha1 RESOURCEPACK_MERGE_REPORT.txt
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Build merged server resource pack'
+          git push
