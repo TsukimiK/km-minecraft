@@ -7,8 +7,8 @@ JSON/mcmeta merged: 1
 Vegeter overwrite: 1
 
 [Collisions]
-pack.mcmeta
 pack.png
+pack.mcmeta
 
 [JSON merged]
 pack.mcmeta
