@@ -2,16 +2,18 @@ Merged server resource pack
 Base: VVResource v8.0 (1.21.11+)
 Overlay/priority: km-minecraft-resourcepack-26.2 (Vegeter)
 
-Collision count: 2
-JSON/mcmeta merged: 1
+Collision count: 3
+JSON/mcmeta merged: 2
 Vegeter overwrite: 1
 
 [Collisions]
 pack.png
 pack.mcmeta
+assets/minecraft/atlases/blocks.json
 
 [JSON merged]
 pack.mcmeta
+assets/minecraft/atlases/blocks.json
 
 [Vegeter overwrite]
 pack.png
