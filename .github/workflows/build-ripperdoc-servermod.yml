@@ -1,0 +1,54 @@
+name: Build Ripperdoc Fabric Server Mod
+
+on:
+  push:
+    branches:
+      - ripperdoc-servermod-v1-build
+    paths:
+      - 'ripperdoc-fabric-mod/**'
+      - '.github/workflows/build-ripperdoc-servermod.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Build remapped Fabric JAR
+        working-directory: ripperdoc-fabric-mod
+        run: gradle build --stacktrace
+
+      - name: Verify skeleton JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR=$(find ripperdoc-fabric-mod/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.1.0.jar' -print -quit)
+          test -n "$JAR"
+          jar tf "$JAR" | grep -q '^fabric.mod.json$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocMod.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocRuntime.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocCommands.class$'
+          echo "Verified skeleton: $JAR"
+
+      - name: Upload skeleton artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ripperdoc-servermod-26.2-v1.1.0-skeleton
+          path: ripperdoc-fabric-mod/build/libs/ripperdoc-servermod-26.2-1.1.0.jar
+          if-no-files-found: error
