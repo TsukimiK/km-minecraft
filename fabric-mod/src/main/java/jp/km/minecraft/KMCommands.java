@@ -5,6 +5,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
@@ -64,7 +65,10 @@ public final class KMCommands {
 
             dispatcher.register(Commands.literal("km")
                     .then(Commands.literal("status").executes(ctx -> {
-                        run(ctx.getSource(), "say [KM Minecraft] Fabric Java entrypoint v" + KMMinecraftMod.VERSION + " active");
+                        ctx.getSource().sendSuccess(
+                                () -> Component.literal("[KM Minecraft] Fabric Java entrypoint v" + KMMinecraftMod.VERSION + " active"),
+                                false
+                        );
                         return Command.SINGLE_SUCCESS;
                     }))
                     .then(Commands.literal("functiontest")
