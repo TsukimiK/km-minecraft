@@ -39,6 +39,7 @@ jobs:
           unzip -oq /tmp/ripperdoc-resources.zip
           python3 apply_test_feedback_v101.py
           python3 apply_test_feedback_v102.py
+          python3 apply_test_feedback_v103.py
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -57,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.2.jar' -print -quit)
+          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.3.jar' -print -quit)
           test -n "$JAR"
           jar tf "$JAR" | grep -q '^fabric.mod.json$'
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocMod.class$'
@@ -65,7 +66,10 @@ jobs:
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocItems.class$'
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocConfig.class$'
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocCommands.class$'
-          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocHud.class$'
+          if jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocHud.class$'; then
+            echo 'ERROR: obsolete potion-proxy HUD class remains' >&2
+            exit 1
+          fi
           if jar tf "$JAR" | grep -q '\.mcfunction$'; then
             echo 'ERROR: native build unexpectedly contains mcfunction runtime files' >&2
             exit 1
@@ -78,13 +82,21 @@ jobs:
             echo 'ERROR: obsolete datapack impulse enchantments are still present' >&2
             exit 1
           fi
-          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/recipe/.*\.json$')" -eq 5
-          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/loot_table/items/.*\.json$')" -eq 5
+          if jar tf "$JAR" | grep -q '^data/ripperdoc/recipe/aquatic.json$'; then
+            echo 'ERROR: removed AQUATIC recipe remains' >&2
+            exit 1
+          fi
+          if jar tf "$JAR" | grep -q '^data/ripperdoc/loot_table/items/aquatic.json$'; then
+            echo 'ERROR: removed AQUATIC loot remains' >&2
+            exit 1
+          fi
+          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/recipe/.*\.json$')" -eq 4
+          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/loot_table/items/.*\.json$')" -eq 4
           echo "Verified native Ripperdoc JAR: $JAR"
 
       - name: Upload Ripperdoc native artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ripperdoc-servermod-26.2-v1.0.2-native-test
-          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.2.jar
+          name: ripperdoc-servermod-26.2-v1.0.3-native-test
+          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.3.jar
           if-no-files-found: error
