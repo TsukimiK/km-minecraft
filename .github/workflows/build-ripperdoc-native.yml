@@ -1,0 +1,83 @@
+name: Build Ripperdoc Native Server Mod
+
+on:
+  push:
+    branches:
+      - ripperdoc-native-v1-build
+    paths:
+      - 'ripperdoc-native/**'
+      - '.github/workflows/build-ripperdoc-native.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Restore static Ripperdoc data resources
+        working-directory: ripperdoc-native
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d resources.zip.b64 > /tmp/ripperdoc-resources.zip
+          unzip -oq /tmp/ripperdoc-resources.zip
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('src/main/resources')
+          files = list(root.rglob('*.json'))
+          for p in files:
+              json.loads(p.read_text(encoding='utf-8'))
+          print(f'Validated {len(files)} JSON resources')
+          PY
+
+      - name: Build native Fabric JAR
+        working-directory: ripperdoc-native
+        run: gradle build --stacktrace
+
+      - name: Verify native architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.0.jar' -print -quit)
+          test -n "$JAR"
+          jar tf "$JAR" | grep -q '^fabric.mod.json$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocMod.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocRuntime.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocItems.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocConfig.class$'
+          jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocCommands.class$'
+          if jar tf "$JAR" | grep -q '\.mcfunction$'; then
+            echo 'ERROR: native build unexpectedly contains mcfunction runtime files' >&2
+            exit 1
+          fi
+          if jar tf "$JAR" | grep -q '/item_modifier/'; then
+            echo 'ERROR: native build unexpectedly contains item_modifier runtime files' >&2
+            exit 1
+          fi
+          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/recipe/.*\.json$')" -eq 5
+          test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/loot_table/items/.*\.json$')" -eq 5
+          echo "Verified native Ripperdoc JAR: $JAR"
+
+      - name: Upload Ripperdoc native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ripperdoc-servermod-26.2-v1.0.0-native
+          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.0.jar
+          if-no-files-found: error
