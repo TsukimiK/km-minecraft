@@ -7,12 +7,13 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 /**
  * KM Minecraft Fabric server mod bootstrap.
  *
- * <p>The old external datapack is not required. Gameplay data is bundled in the mod JAR,
- * while Java owns initialization, command registration and tick dispatch.</p>
+ * <p>The former external datapack is replaced by resources bundled in this mod JAR.
+ * Existing KM item data, resource identifiers and placed crop entity tags are kept
+ * compatible so an existing world can be migrated without recreating KM content.</p>
  */
 public final class KMMinecraftMod implements ModInitializer {
     public static final String MOD_ID = "km-minecraft";
-    public static final String VERSION = "2.0.2";
+    public static final String VERSION = "2.1.0";
 
     @Override
     public void onInitialize() {
