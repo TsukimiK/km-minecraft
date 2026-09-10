@@ -11,7 +11,6 @@ import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 
@@ -23,7 +22,9 @@ import java.util.UUID;
 public final class RipperdocRuntime {
     public static final int ABILITY_TICKS = 20 * 60 * 5;
     private static final int USE_HOLD_TICKS = 32;
-    private static final int OWNERSHIP_GRACE_TICKS = 3;
+    private static final int OWNERSHIP_GRACE_CHECKS = 2;
+    private static final int OWNERSHIP_CHECK_INTERVAL = 10;
+    private static final int VISUAL_FALLBACK_INTERVAL = 40;
     private static final int MOONTECH_SESSION_TIMEOUT = 20 * 60;
     private static final double MOONTECH_JUMP_ADD = 0.265;
     private static final double MOONTECH_SECOND_JUMP_Y = 0.685;
@@ -43,11 +44,12 @@ public final class RipperdocRuntime {
 
     private final Map<UUID, PlayerState> states = new HashMap<>();
     private RipperdocConfig config;
-    private int visualTicker;
+    private int visualFallbackTicker;
 
     public void onServerStarted(MinecraftServer server) {
         states.clear();
         config = RipperdocConfig.loadOrMigrate(server);
+        // Remove any helper platforms left by the old datapack. The native implementation never creates them.
         runSilent(server, "kill @e[type=minecraft:shulker,tag=rd_aq_platform]");
         for (ServerPlayer player : server.getPlayerList().getPlayers()) onJoin(player);
         RipperdocMod.LOGGER.info("Native runtime ready. No datapack tick/function runtime is used.");
@@ -58,6 +60,7 @@ public final class RipperdocRuntime {
             PlayerState state = states.get(player.getUUID());
             if (state != null) {
                 disableAll(player, state);
+                cleanupAttributeModifiers(player);
                 RipperdocItems.syncPlayerVisuals(player, state);
             }
         }
@@ -67,9 +70,15 @@ public final class RipperdocRuntime {
         PlayerState existing = states.get(player.getUUID());
         if (existing != null) {
             cleanupAttributeModifiers(player);
-            reapplyFromState(player, existing);
+
+            // A disconnected player's transient modifiers no longer exist on the new player instance.
+            // Re-evaluate boots and re-apply only the native modifiers represented by in-memory state.
+            existing.moontechEquipped = false;
+            existing.aquaticOnSurface = false;
             updateMoontechEquip(player, existing);
-            RipperdocItems.syncPlayerVisuals(player, existing);
+            reapplyFromState(player, existing);
+            existing.visualDirty = true;
+            syncVisualsIfNeeded(player, existing, true);
             return;
         }
 
@@ -77,11 +86,14 @@ public final class RipperdocRuntime {
         states.put(player.getUUID(), state);
         cleanupLegacyPlayer(player);
         updateMoontechEquip(player, state);
-        RipperdocItems.syncPlayerVisuals(player, state);
+        state.visualDirty = true;
+        syncVisualsIfNeeded(player, state, true);
     }
 
     public void onDisconnect(ServerPlayer player) {
-        // Timers stay in memory so reconnecting during the same server session pauses/resumes like the datapack.
+        // Timers remain in memory and therefore pause while the player is offline, matching the datapack behavior.
+        PlayerState state = states.get(player.getUUID());
+        if (state != null) state.aquaticOnSurface = false;
         cleanupAttributeModifiers(player);
     }
 
@@ -89,13 +101,14 @@ public final class RipperdocRuntime {
         PlayerState state = states.computeIfAbsent(player.getUUID(), id -> new PlayerState());
         disableAll(player, state);
         state.resetMovementSession();
-        RipperdocItems.syncPlayerVisuals(player, state);
+        state.visualDirty = true;
+        syncVisualsIfNeeded(player, state, true);
     }
 
     public void onTick(MinecraftServer server) {
-        visualTicker++;
-        boolean visualPass = visualTicker >= 10;
-        if (visualPass) visualTicker = 0;
+        visualFallbackTicker++;
+        boolean fallbackVisualPass = visualFallbackTicker >= VISUAL_FALLBACK_INTERVAL;
+        if (fallbackVisualPass) visualFallbackTicker = 0;
 
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             PlayerState state = states.computeIfAbsent(player.getUUID(), id -> new PlayerState());
@@ -103,7 +116,7 @@ public final class RipperdocRuntime {
             tickTimedAbilities(player, state);
             tickMoontech(player, state);
             tickAquatic(player, state);
-            if (visualPass) RipperdocItems.syncPlayerVisuals(player, state);
+            syncVisualsIfNeeded(player, state, fallbackVisualPass);
             state.previousOnGround = player.onGround();
         }
     }
@@ -130,12 +143,12 @@ public final class RipperdocRuntime {
 
         if (state.useHoldTicks < USE_HOLD_TICKS) return;
 
-        // The original item has a 60-second consumable. Stop at 32 ticks, before vanilla can consume it.
+        // Legacy items deliberately have a 60-second consumable. Stop at 32 ticks, before vanilla can consume them.
         player.stopUsingItem();
         toggleTimedAbility(player, state, currentId);
         state.useId = "";
         state.useHoldTicks = 0;
-        RipperdocItems.syncPlayerVisuals(player, state);
+        state.visualDirty = true;
     }
 
     private void toggleTimedAbility(ServerPlayer player, PlayerState state, String id) {
@@ -152,7 +165,8 @@ public final class RipperdocRuntime {
                 if (state.aquaticTicks > 0) disableAquatic(player, state);
                 else {
                     state.aquaticTicks = ABILITY_TICKS;
-                    state.aquaticMissing = 0;
+                    state.aquaticMissingChecks = 0;
+                    state.visualDirty = true;
                 }
             }
             default -> { }
@@ -160,48 +174,61 @@ public final class RipperdocRuntime {
     }
 
     private void tickTimedAbilities(ServerPlayer player, PlayerState state) {
+        if (state.zandeTicks > 0 && --state.zandeTicks <= 0) disableZande(player, state);
+        if (state.berserkTicks > 0 && --state.berserkTicks <= 0) disableBerserk(player, state);
+        if (state.aquaticTicks > 0 && --state.aquaticTicks <= 0) disableAquatic(player, state);
+
+        state.ownershipTicker++;
+        if (state.ownershipTicker < OWNERSHIP_CHECK_INTERVAL) return;
+        state.ownershipTicker = 0;
+
         if (state.zandeTicks > 0) {
-            state.zandeMissing = RipperdocItems.hasPlayerOwned(player, RipperdocItems.ZANDEVISTAN) ? 0 : state.zandeMissing + 1;
-            if (state.zandeMissing >= OWNERSHIP_GRACE_TICKS || --state.zandeTicks <= 0) disableZande(player, state);
+            state.zandeMissingChecks = RipperdocItems.hasPlayerOwned(player, RipperdocItems.ZANDEVISTAN) ? 0 : state.zandeMissingChecks + 1;
+            if (state.zandeMissingChecks >= OWNERSHIP_GRACE_CHECKS) disableZande(player, state);
         }
         if (state.berserkTicks > 0) {
-            state.berserkMissing = RipperdocItems.hasPlayerOwned(player, RipperdocItems.BERSERK) ? 0 : state.berserkMissing + 1;
-            if (state.berserkMissing >= OWNERSHIP_GRACE_TICKS || --state.berserkTicks <= 0) disableBerserk(player, state);
+            state.berserkMissingChecks = RipperdocItems.hasPlayerOwned(player, RipperdocItems.BERSERK) ? 0 : state.berserkMissingChecks + 1;
+            if (state.berserkMissingChecks >= OWNERSHIP_GRACE_CHECKS) disableBerserk(player, state);
         }
         if (state.aquaticTicks > 0) {
-            state.aquaticMissing = RipperdocItems.hasPlayerOwned(player, RipperdocItems.AQUATIC) ? 0 : state.aquaticMissing + 1;
-            if (state.aquaticMissing >= OWNERSHIP_GRACE_TICKS || --state.aquaticTicks <= 0) disableAquatic(player, state);
+            state.aquaticMissingChecks = RipperdocItems.hasPlayerOwned(player, RipperdocItems.AQUATIC) ? 0 : state.aquaticMissingChecks + 1;
+            if (state.aquaticMissingChecks >= OWNERSHIP_GRACE_CHECKS) disableAquatic(player, state);
         }
     }
 
     private void enableZande(ServerPlayer player, PlayerState state) {
         state.zandeTicks = ABILITY_TICKS;
-        state.zandeMissing = 0;
+        state.zandeMissingChecks = 0;
+        state.visualDirty = true;
         applyZande(player);
     }
 
     private void disableZande(ServerPlayer player, PlayerState state) {
         state.zandeTicks = 0;
-        state.zandeMissing = 0;
+        state.zandeMissingChecks = 0;
+        state.visualDirty = true;
         removeModifier(player, Attributes.MOVEMENT_SPEED, ZANDE_MOD);
     }
 
     private void enableBerserk(ServerPlayer player, PlayerState state) {
         state.berserkTicks = ABILITY_TICKS;
-        state.berserkMissing = 0;
+        state.berserkMissingChecks = 0;
+        state.visualDirty = true;
         applyBerserk(player);
     }
 
     private void disableBerserk(ServerPlayer player, PlayerState state) {
         state.berserkTicks = 0;
-        state.berserkMissing = 0;
+        state.berserkMissingChecks = 0;
+        state.visualDirty = true;
         removeModifier(player, Attributes.ATTACK_DAMAGE, BERSERK_DAMAGE_MOD);
         removeModifier(player, Attributes.BLOCK_BREAK_SPEED, BERSERK_MINING_MOD);
     }
 
     private void disableAquatic(ServerPlayer player, PlayerState state) {
         state.aquaticTicks = 0;
-        state.aquaticMissing = 0;
+        state.aquaticMissingChecks = 0;
+        state.visualDirty = true;
         disableAquaticSurface(player, state);
     }
 
@@ -273,11 +300,14 @@ public final class RipperdocRuntime {
         state.secondJumpUsed = false;
         state.moonGroundTicks = 0;
         state.moonAge = 0;
+        applyMoontechFallProtection(player);
+    }
+
+    private void applyMoontechFallProtection(ServerPlayer player) {
         AttributeInstance fall = player.getAttribute(Attributes.FALL_DAMAGE_MULTIPLIER);
-        if (fall != null) {
-            fall.removeModifier(MOONTECH_FALL_MOD);
-            fall.addTransientModifier(new AttributeModifier(MOONTECH_FALL_MOD, -1.0, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
-        }
+        if (fall == null) return;
+        fall.removeModifier(MOONTECH_FALL_MOD);
+        fall.addTransientModifier(new AttributeModifier(MOONTECH_FALL_MOD, -1.0, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
     }
 
     private void endMoontechFallSession(ServerPlayer player, PlayerState state) {
@@ -307,19 +337,14 @@ public final class RipperdocRuntime {
     }
 
     private void tickAquatic(ServerPlayer player, PlayerState state) {
-        if (state.aquaticTicks <= 0) {
+        boolean jump = player.getLastClientInput().jump();
+        if (state.aquaticTicks <= 0 || player.isPassenger() || player.isFallFlying() || player.isInLava()) {
             disableAquaticSurface(player, state);
-            state.previousAquaticJump = player.getLastClientInput().jump();
-            return;
-        }
-        if (player.isPassenger() || player.isFallFlying() || player.isInLava()) {
-            disableAquaticSurface(player, state);
-            state.previousAquaticJump = player.getLastClientInput().jump();
+            state.previousAquaticJump = jump;
             return;
         }
 
         Double surfaceY = findWaterSurface(player);
-        boolean jump = player.getLastClientInput().jump();
         if (surfaceY == null) {
             disableAquaticSurface(player, state);
             state.previousAquaticJump = jump;
@@ -360,6 +385,7 @@ public final class RipperdocRuntime {
     private Double findWaterSurface(ServerPlayer player) {
         ServerLevel level = player.level();
         BlockPos feet = BlockPos.containing(player.getX(), player.getY() + 0.05, player.getZ());
+        // If feet are already inside water, let vanilla swimming take over instead of snapping upward.
         if (level.getFluidState(feet).is(FluidTags.WATER)) return null;
 
         for (int i = 0; i <= 4; i++) {
@@ -383,7 +409,6 @@ public final class RipperdocRuntime {
         if (!state.aquaticOnSurface) return;
         state.aquaticOnSurface = false;
         removeModifier(player, Attributes.GRAVITY, AQUATIC_GRAVITY_MOD);
-        player.setOnGround(false);
     }
 
     private void cleanupLegacyPlayer(ServerPlayer player) {
@@ -405,8 +430,7 @@ public final class RipperdocRuntime {
     private void reapplyFromState(ServerPlayer player, PlayerState state) {
         if (state.zandeTicks > 0) applyZande(player);
         if (state.berserkTicks > 0) applyBerserk(player);
-        if (state.moonFallSession) startMoontechFallSession(player, state);
-        if (state.aquaticOnSurface) enableAquaticSurface(player, state);
+        if (state.moonFallSession && state.moontechEquipped) applyMoontechFallProtection(player);
     }
 
     private void disableAll(ServerPlayer player, PlayerState state) {
@@ -414,6 +438,14 @@ public final class RipperdocRuntime {
         disableBerserk(player, state);
         disableAquatic(player, state);
         endMoontechFallSession(player, state);
+    }
+
+    private void syncVisualsIfNeeded(ServerPlayer player, PlayerState state, boolean fallback) {
+        int inventoryChange = player.getInventory().getTimesChanged();
+        if (!state.visualDirty && !fallback && inventoryChange == state.lastInventoryChange) return;
+        RipperdocItems.syncPlayerVisuals(player, state);
+        state.lastInventoryChange = player.getInventory().getTimesChanged();
+        state.visualDirty = false;
     }
 
     private static void removeModifier(ServerPlayer player, net.minecraft.core.Holder<net.minecraft.world.entity.ai.attributes.Attribute> attribute, Identifier id) {
@@ -441,9 +473,10 @@ public final class RipperdocRuntime {
         public int zandeTicks;
         public int berserkTicks;
         public int aquaticTicks;
-        int zandeMissing;
-        int berserkMissing;
-        int aquaticMissing;
+        int zandeMissingChecks;
+        int berserkMissingChecks;
+        int aquaticMissingChecks;
+        int ownershipTicker;
         String useId = "";
         int useHoldTicks;
         boolean moontechEquipped;
@@ -456,12 +489,16 @@ public final class RipperdocRuntime {
         boolean previousAquaticJump;
         boolean previousOnGround;
         boolean aquaticOnSurface;
+        int lastInventoryChange = -1;
+        boolean visualDirty = true;
 
         void clearAbilities() {
             zandeTicks = berserkTicks = aquaticTicks = 0;
-            zandeMissing = berserkMissing = aquaticMissing = 0;
+            zandeMissingChecks = berserkMissingChecks = aquaticMissingChecks = 0;
+            ownershipTicker = 0;
             useId = "";
             useHoldTicks = 0;
+            visualDirty = true;
             resetMovementSession();
         }
 
