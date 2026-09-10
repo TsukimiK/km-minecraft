@@ -14,7 +14,7 @@ public final class KMRuntime {
         run(server, "function km-minecraft:core/tick");
     }
 
-    private static int run(MinecraftServer server, String command) {
-        return server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), command);
+    private static void run(MinecraftServer server, String command) {
+        server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), command);
     }
 }
