@@ -12,7 +12,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
  */
 public final class KMMinecraftMod implements ModInitializer {
     public static final String MOD_ID = "km-minecraft";
-    public static final String VERSION = "2.0.0";
+    public static final String VERSION = "2.0.1";
 
     @Override
     public void onInitialize() {
