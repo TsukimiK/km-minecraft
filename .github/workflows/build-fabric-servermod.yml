@@ -60,11 +60,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          JAR=$(find fabric-mod/build/libs -maxdepth 1 -name 'km-minecraft-servermod-26.2-2.0.1.jar' -print -quit)
+          JAR=$(find fabric-mod/build/libs -maxdepth 1 -name 'km-minecraft-servermod-26.2-2.0.2.jar' -print -quit)
           test -n "$JAR"
           jar tf "$JAR" | grep -q '^fabric.mod.json$'
           jar tf "$JAR" | grep -q '^jp/km/minecraft/KMMinecraftMod.class$'
           jar tf "$JAR" | grep -q '^jp/km/minecraft/KMCommands.class$'
+          jar tf "$JAR" | grep -q '^jp/km/minecraft/KMRuntime.class$'
           jar tf "$JAR" | grep -q '^data/km-minecraft/function/core/tick.mcfunction$'
           if jar tf "$JAR" | grep -q '^data/minecraft/tags/function/tick.json$'; then
             echo 'Unexpected vanilla tick function tag found' >&2
@@ -75,6 +76,6 @@ jobs:
       - name: Upload Fabric mod artifact
         uses: actions/upload-artifact@v4
         with:
-          name: km-minecraft-servermod-26.2-v2.0.1
-          path: fabric-mod/build/libs/km-minecraft-servermod-26.2-2.0.1.jar
+          name: km-minecraft-servermod-26.2-v2.0.2
+          path: fabric-mod/build/libs/km-minecraft-servermod-26.2-2.0.2.jar
           if-no-files-found: error
