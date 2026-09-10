@@ -40,6 +40,7 @@ jobs:
           python3 apply_test_feedback_v101.py
           python3 apply_test_feedback_v102.py
           python3 apply_test_feedback_v103.py
+          python3 apply_release_v104.py
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -54,11 +55,11 @@ jobs:
         working-directory: ripperdoc-native
         run: gradle build --stacktrace
 
-      - name: Verify native architecture
+      - name: Verify native release architecture
         shell: bash
         run: |
           set -euo pipefail
-          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.3.jar' -print -quit)
+          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.4.jar' -print -quit)
           test -n "$JAR"
           jar tf "$JAR" | grep -q '^fabric.mod.json$'
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocMod.class$'
@@ -92,11 +93,16 @@ jobs:
           fi
           test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/recipe/.*\.json$')" -eq 4
           test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/loot_table/items/.*\.json$')" -eq 4
-          echo "Verified native Ripperdoc JAR: $JAR"
+          unzip -p "$JAR" data/ripperdoc/loot_table/items/moontech.json | grep -q '2段目ジャンプ（1回のみ）'
+          if unzip -p "$JAR" data/ripperdoc/loot_table/items/moontech.json | grep -q '合計3段'; then
+            echo 'ERROR: obsolete triple-jump lore remains' >&2
+            exit 1
+          fi
+          echo "Verified Ripperdoc release JAR: $JAR"
 
-      - name: Upload Ripperdoc native artifact
+      - name: Upload Ripperdoc release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ripperdoc-servermod-26.2-v1.0.3-native-test
-          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.3.jar
+          name: ripperdoc-servermod-26.2-v1.0.4-release
+          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.4.jar
           if-no-files-found: error
