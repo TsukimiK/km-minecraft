@@ -39,7 +39,7 @@ jobs:
           mkdir -p /tmp/km-datapack fabric-mod/src/main/resources
           unzip -q km-minecraft-datapack-26.2.zip -d /tmp/km-datapack
           cp -a /tmp/km-datapack/data fabric-mod/src/main/resources/data
-          base64 -d fabric-mod/km-v2-data.patch.gz.b64 | gzip -dc > /tmp/km-v2-data.patch
+          base64 -d fabric-mod/km-v2-data-v2.patch.gz.b64 | gzip -dc > /tmp/km-v2-data.patch
           cd fabric-mod/src/main/resources
           patch -p1 < /tmp/km-v2-data.patch
           cd ../../../..
