@@ -37,6 +37,7 @@ jobs:
           set -euo pipefail
           base64 -d resources.zip.b64 > /tmp/ripperdoc-resources.zip
           unzip -oq /tmp/ripperdoc-resources.zip
+          python3 apply_test_feedback_v101.py
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -55,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.0.jar' -print -quit)
+          JAR=$(find ripperdoc-native/build/libs -maxdepth 1 -name 'ripperdoc-servermod-26.2-1.0.1.jar' -print -quit)
           test -n "$JAR"
           jar tf "$JAR" | grep -q '^fabric.mod.json$'
           jar tf "$JAR" | grep -q '^jp/km/ripperdoc/RipperdocMod.class$'
@@ -71,6 +72,10 @@ jobs:
             echo 'ERROR: native build unexpectedly contains item_modifier runtime files' >&2
             exit 1
           fi
+          if jar tf "$JAR" | grep -q '^data/ripperdoc/enchantment/'; then
+            echo 'ERROR: obsolete datapack impulse enchantments are still present' >&2
+            exit 1
+          fi
           test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/recipe/.*\.json$')" -eq 5
           test "$(jar tf "$JAR" | grep -c '^data/ripperdoc/loot_table/items/.*\.json$')" -eq 5
           echo "Verified native Ripperdoc JAR: $JAR"
@@ -78,6 +83,6 @@ jobs:
       - name: Upload Ripperdoc native artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ripperdoc-servermod-26.2-v1.0.0-native
-          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.0.jar
+          name: ripperdoc-servermod-26.2-v1.0.1-native-test
+          path: ripperdoc-native/build/libs/ripperdoc-servermod-26.2-1.0.1.jar
           if-no-files-found: error
