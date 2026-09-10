@@ -7,14 +7,22 @@ public final class KMRuntime {
     private KMRuntime() {}
 
     public static void onServerStarted(MinecraftServer server) {
-        run(server, "function km-minecraft:core/load");
+        runSilent(server, "function km-minecraft:core/load");
     }
 
     public static void onServerTick(MinecraftServer server) {
-        run(server, "function km-minecraft:core/tick");
+        runSilent(server, "function km-minecraft:core/tick");
     }
 
-    private static void run(MinecraftServer server, String command) {
-        server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), command);
+    /**
+     * Execute internal KM commands without sending command feedback to the server console.
+     * The old implementation used the normal server command source and printed
+     * "Running function km-minecraft:core/tick" every tick.
+     */
+    private static void runSilent(MinecraftServer server, String command) {
+        server.getCommands().performPrefixedCommand(
+                server.createCommandSourceStack().withSuppressedOutput(),
+                command
+        );
     }
 }
