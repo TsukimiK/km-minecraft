@@ -54,8 +54,7 @@ public final class KMCommands {
                     .then(Commands.literal("asahatamon_armor").executes(ctx -> giveMany(ctx.getSource(), ASAHATAMON_ARMOR)))
                     .then(Commands.literal("cigarette_box").executes(ctx -> giveOne(ctx.getSource(), CIGARETTE_BOX)))
                     .then(Commands.literal("all").executes(ctx -> {
-                        int result = giveOne(ctx.getSource(), SEEDS);
-                        if (result == 0) return 0;
+                        giveOne(ctx.getSource(), SEEDS);
                         giveMany(ctx.getSource(), DAIKON_TOOLS);
                         giveMany(ctx.getSource(), ASAHATAMON_TOOLS);
                         giveMany(ctx.getSource(), ASAHATAMON_ARMOR);
@@ -72,26 +71,29 @@ public final class KMCommands {
                     }))
                     .then(Commands.literal("functiontest")
                             .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
-                            .executes(ctx -> run(ctx.getSource(), "function km-minecraft:farming/give_seeds"))));
+                            .executes(ctx -> {
+                                run(ctx.getSource(), "function km-minecraft:farming/give_seeds");
+                                return Command.SINGLE_SUCCESS;
+                            })));
         });
     }
 
     private static int giveOne(CommandSourceStack source, String commandTemplate) throws CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
-        return run(source, commandTemplate.formatted(player.getScoreboardName()));
+        run(source, commandTemplate.formatted(player.getScoreboardName()));
+        return Command.SINGLE_SUCCESS;
     }
 
     private static int giveMany(CommandSourceStack source, List<String> templates) throws CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
         String name = player.getScoreboardName();
-        int ok = 0;
         for (String template : templates) {
-            if (run(source, template.formatted(name)) > 0) ok++;
+            run(source, template.formatted(name));
         }
-        return ok > 0 ? Command.SINGLE_SUCCESS : 0;
+        return Command.SINGLE_SUCCESS;
     }
 
-    private static int run(CommandSourceStack source, String command) {
-        return source.getServer().getCommands().performPrefixedCommand(source, command);
+    private static void run(CommandSourceStack source, String command) {
+        source.getServer().getCommands().performPrefixedCommand(source, command);
     }
 }
