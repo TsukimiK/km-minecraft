@@ -1,0 +1,83 @@
+name: Build Fabric Server Mod
+
+on:
+  push:
+    branches:
+      - fabric-servermod-v2-build
+    paths:
+      - 'fabric-mod/**'
+      - 'km-minecraft-datapack-26.2.zip'
+      - '.github/workflows/build-fabric-servermod.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Build bundled server data
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/km-datapack fabric-mod/src/main/resources/data
+          mkdir -p /tmp/km-datapack fabric-mod/src/main/resources
+          unzip -q km-minecraft-datapack-26.2.zip -d /tmp/km-datapack
+          cp -a /tmp/km-datapack/data fabric-mod/src/main/resources/data
+          base64 -d fabric-mod/km-v2-data.patch.gz.b64 | gzip -dc > /tmp/km-v2-data.patch
+          cd fabric-mod/src/main/resources
+          patch -p1 < /tmp/km-v2-data.patch
+          cd ../../../..
+          test ! -e fabric-mod/src/main/resources/data/minecraft/tags/function/load.json
+          test ! -e fabric-mod/src/main/resources/data/minecraft/tags/function/tick.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('fabric-mod/src/main/resources')
+          files = list(root.rglob('*.json'))
+          for path in files:
+              json.loads(path.read_text(encoding='utf-8'))
+          print(f'Validated {len(files)} JSON resources')
+          PY
+
+      - name: Build remapped Fabric JAR
+        working-directory: fabric-mod
+        run: gradle build --stacktrace
+
+      - name: Verify JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR=$(find fabric-mod/build/libs -maxdepth 1 -name 'km-minecraft-servermod-26.2-2.0.0.jar' -print -quit)
+          test -n "$JAR"
+          jar tf "$JAR" | grep -q '^fabric.mod.json$'
+          jar tf "$JAR" | grep -q '^jp/km/minecraft/KMMinecraftMod.class$'
+          jar tf "$JAR" | grep -q '^jp/km/minecraft/KMCommands.class$'
+          jar tf "$JAR" | grep -q '^data/km-minecraft/function/core/tick.mcfunction$'
+          if jar tf "$JAR" | grep -q '^data/minecraft/tags/function/tick.json$'; then
+            echo 'Unexpected vanilla tick function tag found' >&2
+            exit 1
+          fi
+          echo "Verified: $JAR"
+
+      - name: Upload Fabric mod artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: km-minecraft-servermod-26.2-v2.0.0
+          path: fabric-mod/build/libs/km-minecraft-servermod-26.2-2.0.0.jar
+          if-no-files-found: error
