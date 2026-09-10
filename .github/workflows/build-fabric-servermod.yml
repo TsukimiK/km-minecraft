@@ -40,8 +40,22 @@ jobs:
           unzip -q km-minecraft-datapack-26.2.zip -d /tmp/km-datapack
           cp -a /tmp/km-datapack/data fabric-mod/src/main/resources/data
           python3 fabric-mod/apply_v2.py fabric-mod/src/main/resources/data
+
+          # The external datapack's automatic load/tick tags must not survive;
+          # Java owns those dispatch points in the Fabric mod.
           test ! -e fabric-mod/src/main/resources/data/minecraft/tags/function/load.json
           test ! -e fabric-mod/src/main/resources/data/minecraft/tags/function/tick.json
+
+          # Production compatibility guard: every KM namespaced resource that
+          # existed in the former datapack must still exist in the mod build.
+          find /tmp/km-datapack/data/km-minecraft -type f -printf '%P\n' | sort > /tmp/km-old-files.txt
+          find fabric-mod/src/main/resources/data/km-minecraft -type f -printf '%P\n' | sort > /tmp/km-new-files.txt
+          if comm -23 /tmp/km-old-files.txt /tmp/km-new-files.txt | grep -q .; then
+            echo 'ERROR: a legacy KM resource is missing from the production build:' >&2
+            comm -23 /tmp/km-old-files.txt /tmp/km-new-files.txt >&2
+            exit 1
+          fi
+
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -60,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          JAR=$(find fabric-mod/build/libs -maxdepth 1 -name 'km-minecraft-servermod-26.2-2.0.2.jar' -print -quit)
+          JAR=$(find fabric-mod/build/libs -maxdepth 1 -name 'km-minecraft-servermod-26.2-2.1.0.jar' -print -quit)
           test -n "$JAR"
           jar tf "$JAR" | grep -q '^fabric.mod.json$'
           jar tf "$JAR" | grep -q '^jp/km/minecraft/KMMinecraftMod.class$'
@@ -76,6 +90,6 @@ jobs:
       - name: Upload Fabric mod artifact
         uses: actions/upload-artifact@v4
         with:
-          name: km-minecraft-servermod-26.2-v2.0.2
-          path: fabric-mod/build/libs/km-minecraft-servermod-26.2-2.0.2.jar
+          name: km-minecraft-servermod-26.2-v2.1.0-production
+          path: fabric-mod/build/libs/km-minecraft-servermod-26.2-2.1.0.jar
           if-no-files-found: error
