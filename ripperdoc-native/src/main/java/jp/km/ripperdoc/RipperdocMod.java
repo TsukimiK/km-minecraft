@@ -36,7 +36,7 @@ public final class RipperdocMod implements ModInitializer {
         ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
             if (entity instanceof ItemEntity itemEntity) {
                 RipperdocItems.normalizeDropped(itemEntity);
-            } else if (entity.getTags().contains("rd_aq_platform")) {
+            } else if (entity.entityTags().contains("rd_aq_platform")) {
                 entity.discard();
             }
         });
