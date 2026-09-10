@@ -64,9 +64,7 @@ public final class KMCommands {
 
             dispatcher.register(Commands.literal("km")
                     .then(Commands.literal("status").executes(ctx -> {
-                        ServerPlayer player = ctx.getSource().getPlayerOrException();
-                        String name = player.getScoreboardName();
-                        run(ctx.getSource(), "tellraw " + name + " {text:'[KM Minecraft] Fabric Java entrypoint v" + KMMinecraftMod.VERSION + " active',color:'green'}");
+                        run(ctx.getSource(), "say [KM Minecraft] Fabric Java entrypoint v" + KMMinecraftMod.VERSION + " active");
                         return Command.SINGLE_SUCCESS;
                     }))
                     .then(Commands.literal("functiontest")
