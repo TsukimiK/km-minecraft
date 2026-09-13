@@ -1,0 +1,30 @@
+name: Fetch VVResource temp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fetch-vvresource-temp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VVResource
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            'https://www.dropbox.com/scl/fi/bzj1csxthwvdry8jf9akg/VVResource_8.0-for-1.21.11_26.1.zip?rlkey=4uompqi26ytbv97seysxa2lv3&dl=1' \
+            -o VVResource.zip
+          unzip -t VVResource.zip >/dev/null
+      - name: Upload VVResource
+        uses: actions/upload-artifact@v4
+        with:
+          name: vvresource-temp
+          path: VVResource.zip
+          if-no-files-found: error
+          retention-days: 1
