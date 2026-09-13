@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'km-minecraft-resourcepack-26.2.zip'
+      - 'mineshakler-resourcepack-26.2.zip'
       - '.github/workflows/build-server-resourcepack.yml'
 
 permissions:
@@ -18,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download VVResource v8.0
+      - name: Validate source packs
         shell: bash
         run: |
           set -euo pipefail
@@ -27,15 +28,24 @@ jobs:
             -o /tmp/vvresource.zip
           unzip -t /tmp/vvresource.zip >/dev/null
           unzip -t km-minecraft-resourcepack-26.2.zip >/dev/null
+          if [[ -f mineshakler-resourcepack-26.2.zip ]]; then
+            unzip -t mineshakler-resourcepack-26.2.zip >/dev/null
+            echo 'MineShakler overlay: enabled'
+          else
+            echo 'MineShakler overlay: not present (building legacy two-layer pack)'
+          fi
 
       - name: Merge resource packs
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/vv /tmp/km /tmp/merged
-          mkdir -p /tmp/vv /tmp/km /tmp/merged
+          rm -rf /tmp/vv /tmp/km /tmp/mineshakler /tmp/merged
+          mkdir -p /tmp/vv /tmp/km /tmp/mineshakler /tmp/merged
           unzip -q /tmp/vvresource.zip -d /tmp/vv
           unzip -q km-minecraft-resourcepack-26.2.zip -d /tmp/km
+          if [[ -f mineshakler-resourcepack-26.2.zip ]]; then
+            unzip -q mineshakler-resourcepack-26.2.zip -d /tmp/mineshakler
+          fi
 
           python3 - <<'PY'
           from pathlib import Path
@@ -43,43 +53,42 @@ jobs:
 
           vv = Path('/tmp/vv')
           km = Path('/tmp/km')
+          mine = Path('/tmp/mineshakler')
           out = Path('/tmp/merged')
-          collisions = []
-          merged_json = []
-          overwritten = []
 
           def flatten_single_wrapper(root: Path):
+              if not root.exists():
+                  return
               items = [p for p in root.iterdir() if p.name != '__MACOSX']
-              if len(items) == 1 and items[0].is_dir() and not (root/'pack.mcmeta').exists():
+              if len(items) == 1 and items[0].is_dir() and not (root / 'pack.mcmeta').exists():
                   child = items[0]
                   for p in list(child.iterdir()):
                       shutil.move(str(p), root / p.name)
                   child.rmdir()
 
-          flatten_single_wrapper(vv)
-          flatten_single_wrapper(km)
+          for root in (vv, km, mine):
+              flatten_single_wrapper(root)
 
-          def merge(a, b, key=''):
-              # b (km/Vegeter) has priority when scalar values conflict.
+          def merge_json(a, b):
+              # Later overlays win scalar conflicts. Dicts merge recursively and
+              # list entries are kept from both packs with later overlay first.
               if isinstance(a, dict) and isinstance(b, dict):
-                  r = dict(a)
-                  for k, v in b.items():
-                      r[k] = merge(r[k], v, k) if k in r else v
-                  return r
+                  result = dict(a)
+                  for key, value in b.items():
+                      result[key] = merge_json(result[key], value) if key in result else value
+                  return result
               if isinstance(a, list) and isinstance(b, list):
-                  # Keep both packs' dispatch/case entries; Vegeter entries first.
                   seq = b + a
                   result = []
                   seen = set()
-                  for x in seq:
+                  for item in seq:
                       try:
-                          marker = json.dumps(x, sort_keys=True, ensure_ascii=False)
+                          marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
                       except Exception:
-                          marker = repr(x)
+                          marker = repr(item)
                       if marker not in seen:
                           seen.add(marker)
-                          result.append(x)
-                  # Range-dispatch entries must remain ordered by threshold.
+                          result.append(item)
                   if result and all(isinstance(x, dict) and 'threshold' in x for x in result):
                       try:
                           result.sort(key=lambda x: float(x['threshold']))
@@ -88,54 +97,77 @@ jobs:
                   return result
               return b
 
-          # VVResource is the base.
-          shutil.copytree(vv, out, dirs_exist_ok=True)
+          reports = []
 
-          for src in km.rglob('*'):
-              if not src.is_file():
-                  continue
-              rel = src.relative_to(km)
-              dst = out / rel
-              dst.parent.mkdir(parents=True, exist_ok=True)
-              if not dst.exists():
-                  shutil.copy2(src, dst)
-                  continue
+          def apply_overlay(root: Path, label: str):
+              collisions = []
+              merged_json = []
+              overwritten = []
+              added = []
+              if not root.exists() or not any(root.iterdir()):
+                  reports.append((label, False, collisions, merged_json, overwritten, added))
+                  return
 
-              collisions.append(rel.as_posix())
-              if src.suffix.lower() in {'.json', '.mcmeta'}:
-                  try:
-                      with dst.open('r', encoding='utf-8-sig') as f:
-                          a = json.load(f)
-                      with src.open('r', encoding='utf-8-sig') as f:
-                          b = json.load(f)
-                      data = merge(a, b)
-                      with dst.open('w', encoding='utf-8') as f:
-                          json.dump(data, f, ensure_ascii=False, indent=2)
-                          f.write('\n')
-                      merged_json.append(rel.as_posix())
+              for src in root.rglob('*'):
+                  if not src.is_file():
                       continue
-                  except Exception:
-                      pass
+                  rel = src.relative_to(root)
+                  dst = out / rel
+                  dst.parent.mkdir(parents=True, exist_ok=True)
+                  if not dst.exists():
+                      shutil.copy2(src, dst)
+                      added.append(rel.as_posix())
+                      continue
 
-              # For binary/text conflicts, keep the existing Vegeter asset.
-              shutil.copy2(src, dst)
-              overwritten.append(rel.as_posix())
+                  collisions.append(rel.as_posix())
+                  if src.suffix.lower() in {'.json', '.mcmeta'}:
+                      try:
+                          with dst.open('r', encoding='utf-8-sig') as f:
+                              base_data = json.load(f)
+                          with src.open('r', encoding='utf-8-sig') as f:
+                              overlay_data = json.load(f)
+                          data = merge_json(base_data, overlay_data)
+                          with dst.open('w', encoding='utf-8') as f:
+                              json.dump(data, f, ensure_ascii=False, indent=2)
+                              f.write('\n')
+                          merged_json.append(rel.as_posix())
+                          continue
+                      except Exception:
+                          pass
 
-          report = [
+                  shutil.copy2(src, dst)
+                  overwritten.append(rel.as_posix())
+
+              reports.append((label, True, collisions, merged_json, overwritten, added))
+
+          # Priority: VVResource < km-minecraft < MineShakler
+          shutil.copytree(vv, out, dirs_exist_ok=True)
+          apply_overlay(km, 'km-minecraft-resourcepack-26.2 (Vegeter/Ripperdoc)')
+          apply_overlay(mine, 'mineshakler-resourcepack-26.2')
+
+          lines = [
               'Merged server resource pack',
               'Base: VVResource v8.0 (1.21.11+)',
-              'Overlay/priority: km-minecraft-resourcepack-26.2 (Vegeter)',
+              'Priority: VVResource < km-minecraft < MineShakler',
               '',
-              f'Collision count: {len(collisions)}',
-              f'JSON/mcmeta merged: {len(merged_json)}',
-              f'Vegeter overwrite: {len(overwritten)}',
-              '',
-              '[Collisions]', *collisions,
-              '', '[JSON merged]', *merged_json,
-              '', '[Vegeter overwrite]', *overwritten,
           ]
-          Path('RESOURCEPACK_MERGE_REPORT.txt').write_text('\n'.join(report) + '\n', encoding='utf-8')
-          print('\n'.join(report[:8]))
+          for label, enabled, collisions, merged_json, overwritten, added in reports:
+              lines += [
+                  f'[{label}]',
+                  f'Enabled: {enabled}',
+                  f'Added: {len(added)}',
+                  f'Collision count: {len(collisions)}',
+                  f'JSON/mcmeta merged: {len(merged_json)}',
+                  f'Overlay overwrite: {len(overwritten)}',
+                  '',
+                  'Collisions:', *collisions,
+                  '', 'JSON merged:', *merged_json,
+                  '', 'Overwritten:', *overwritten,
+                  '',
+              ]
+
+          Path('RESOURCEPACK_MERGE_REPORT.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          print('\n'.join(lines[:18]))
           PY
 
       - name: Build ZIP and SHA-1
